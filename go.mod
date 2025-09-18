@@ -1,4 +1,4 @@
-module github.com/exness/go-flink-sql-driver
+module github.com/exness/go-flink-sql
 
 go 1.24.5
 
