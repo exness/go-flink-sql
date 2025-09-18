@@ -688,9 +688,9 @@ func TestFlinkConn_Filesystem_RowAndMap_ScanIntoStructAndMap(t *testing.T) {
 	defer rows.Close()
 
 	type rec struct {
-		id    int64
-		name  string
-		info  RowInfo
+		id   int64
+		name string
+		info RowInfo
 	}
 	var got []rec
 	for rows.Next() {

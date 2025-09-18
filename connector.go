@@ -55,8 +55,10 @@ func WithProperties(properties map[string]string) ConnOption {
 }
 
 type connector struct {
-	client GatewayClient
-	config *ConnConfig
+	client        GatewayClient
+	sessionHandle string
+	config        *ConnConfig
+	properties    map[string]string
 }
 
 // NewConnector creates a connection that can be used with `sql.OpenDB()`.
@@ -66,28 +68,39 @@ func NewConnector(options ...ConnOption) (driver.Connector, error) {
 	for _, opt := range options {
 		opt(cfg)
 	}
+	mergedProps, err := mergeProperties(cfg.GatewayURL, cfg.Properties)
+	if err != nil {
+		return nil, fmt.Errorf("flink: error while merging connector properties: %w", err)
+	}
 	flinkClient, err := NewClient(cfg.GatewayURL, cfg.Client, cfg.APIVersion)
 	if err != nil {
-		return nil, fmt.Errorf("error while creating flink client: %w", err)
+		return nil, fmt.Errorf("flink: error while creating flink client: %w", err)
 	}
-	return &connector{client: flinkClient, config: cfg}, nil
+	return &connector{client: flinkClient, config: cfg, properties: mergedProps}, nil
 }
 
-// Connect returns a new Conn bound to this Connector's client.
+// Connect returns a new Conn bound to this Connector's client and session.
 func (c *connector) Connect(ctx context.Context) (driver.Conn, error) {
-	mergedProps, err := mergeProperties(c.config.GatewayURL, c.config.Properties)
-	if err != nil {
-		return nil, fmt.Errorf("flink: failed to merge properties: %w", err)
+	if c.sessionHandle == "" {
+		var err error
+		c.sessionHandle, err = c.client.OpenSession(ctx, &OpenSessionRequest{
+			Properties: c.properties,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("flink: failed to open session: %w", err)
+		}
 	}
-	handle, err := c.client.OpenSession(ctx, &OpenSessionRequest{
-		Properties: mergedProps,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("flink: failed to open session: %w", err)
+	return &flinkConn{client: c.client, sessionHandle: c.sessionHandle}, nil
+}
+
+// Close closes the gateway session associated with this connector.
+func (c *connector) Close() error {
+	if c.sessionHandle != "" {
+		c.client.CloseSession(context.Background(), c.sessionHandle)
 	}
-	return &flinkConn{client: c.client, sessionHandle: handle}, nil
+	return nil
 }
 
 func (c *connector) Driver() driver.Driver {
-	return &sqlDiver{}
+	return &sqlDriver{}
 }

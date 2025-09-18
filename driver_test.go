@@ -3,7 +3,7 @@ package flink
 import "testing"
 
 func TestSQLDriver_OpenConnector_ParsesProperties(t *testing.T) {
-	driver := &sqlDiver{}
+	driver := &sqlDriver{}
 
 	conn, err := driver.OpenConnector("http://example.com:8083?opt1=val1&opt2=val2")
 	if err != nil {
@@ -28,7 +28,7 @@ func TestSQLDriver_OpenConnector_ParsesProperties(t *testing.T) {
 }
 
 func TestSQLDriver_OpenConnector_InvalidProperties(t *testing.T) {
-	driver := &sqlDiver{}
+	driver := &sqlDriver{}
 
 	if _, err := driver.OpenConnector("http://example.com:8083?opt1"); err == nil {
 		t.Fatalf("OpenConnector() error = nil, want error")

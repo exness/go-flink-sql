@@ -20,12 +20,8 @@ func (c *flinkConn) PrepareContext(ctx context.Context, query string) (driver.St
 	return &flinkStmt{conn: c, query: query, ctx: ctx}, nil
 }
 
-// Close closes the gateway session associated with this connection.
+// Close is a no-op for flinkConn, as the session is managed by the connector.
 func (c *flinkConn) Close() error {
-	if c.sessionHandle != "" {
-		_ = c.client.CloseSession(context.Background(), c.sessionHandle)
-		c.sessionHandle = ""
-	}
 	return nil
 }
 

@@ -6,14 +6,17 @@ import (
 )
 
 func TestConnector_NewConnector_AppliesOptions(t *testing.T) {
-	url := "http://example.com"
+	url := "http://example.com:8083"
 	httpClient := &http.Client{}
-	apiVersion := "v4"
+	apiVersion := "v3"
 	raw, err := NewConnector(
 		WithGatewayURL(url),
 		WithClient(httpClient),
 		WithAPIVersion(apiVersion),
 	)
+	if err != nil {
+		t.Fatalf("expected no error during connector creation, got %v", err)
+	}
 	c := raw.(*connector)
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)

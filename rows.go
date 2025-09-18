@@ -42,6 +42,11 @@ const (
 	multisetType          typeAlias = "MULTISET"
 )
 
+const (
+	resultsMinBackoff = 100 * time.Millisecond
+	resultsMaxBackoff = 1 * time.Second
+)
+
 func normalizeFlinkType(s string) typeAlias {
 	switch strings.ToUpper(s) {
 	case "TINYINT":
@@ -458,8 +463,7 @@ func newResultsIterator(ctx context.Context, conn *flinkConn, operationHandle st
 	sessionHandle := conn.sessionHandle
 
 	return func(yield func(RowData) bool) {
-		baseBackoff := 1 * time.Second
-		backoff := baseBackoff
+		backoff := resultsMinBackoff
 		for {
 			if pos < len(results) {
 				row := results[pos]
@@ -488,12 +492,15 @@ func newResultsIterator(ctx context.Context, conn *flinkConn, operationHandle st
 					conn.cancelOperation(ctx, operationHandle)
 					return
 				case <-time.After(backoff):
-					if backoff < 8*time.Second {
+					if backoff < resultsMaxBackoff {
 						backoff *= 2
+						if backoff > resultsMaxBackoff {
+							backoff = resultsMaxBackoff
+						}
 					}
 				}
 			} else {
-				backoff = baseBackoff
+				backoff = resultsMinBackoff
 			}
 		}
 	}

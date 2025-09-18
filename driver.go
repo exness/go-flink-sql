@@ -9,12 +9,12 @@ import (
 )
 
 func init() {
-	sql.Register("flink", &sqlDiver{})
+	sql.Register("flink", &sqlDriver{})
 }
 
-type sqlDiver struct{}
+type sqlDriver struct{}
 
-func (d *sqlDiver) OpenConnector(dsn string) (driver.Connector, error) {
+func (d *sqlDriver) OpenConnector(dsn string) (driver.Connector, error) {
 	baseDSN := dsn
 	var properties map[string]string
 	if trimmed, rawQuery, found := strings.Cut(baseDSN, "?"); found {
@@ -38,7 +38,7 @@ func (d *sqlDiver) OpenConnector(dsn string) (driver.Connector, error) {
 	return connector, nil
 }
 
-func (d *sqlDiver) Open(dsn string) (driver.Conn, error) {
+func (d *sqlDriver) Open(dsn string) (driver.Conn, error) {
 	conn, err := d.OpenConnector(dsn)
 	if err != nil {
 		return nil, err
