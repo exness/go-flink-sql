@@ -112,17 +112,21 @@ var (
 	scanTypeNullBool   = reflect.TypeOf(sql.NullBool{})
 )
 
-var errRowsClosed = errors.New("flinksql: rows are closed")
+var errRowsClosed = errors.New("flink: rows are closed")
 
+// Rows exposes Flink SQL query results through database/sql by implementing
+// the driver.Rows interface on top of paged gateway responses.
 type Rows struct {
 	conn            *flinkConn
 	operationHandle string
 	ctx             context.Context
 	iterator        iter.Seq[RowData]
 	columns         []ColumnInfo
+	iterErr         error
 	closed          bool
 }
 
+// Columns reports the column names in the order returned by the gateway.
 func (r *Rows) Columns() []string {
 	names := make([]string, len(r.columns))
 	for i, c := range r.columns {
@@ -131,23 +135,27 @@ func (r *Rows) Columns() []string {
 	return names
 }
 
+// ColumnTypeDatabaseTypeName returns the Flink logical type name for a column.
 func (r *Rows) ColumnTypeDatabaseTypeName(index int) string {
 	return strings.ToUpper((r.columns)[index].LogicalType.Type)
 }
 
+// RowsColumnTypeNullable reports whether the column permits NULL values.
 func (r *Rows) RowsColumnTypeNullable(index int) (nullable, ok bool) {
 	return (r.columns)[index].LogicalType.Nullable, true
 }
 
+// Close releases the iterator and asks the gateway to close the underlying operation.
 func (r *Rows) Close() error {
 	if !r.closed {
 		r.closed = true
 		r.iterator = nil
-		r.conn.client.CancelOperation(r.ctx, r.conn.sessionHandle, r.operationHandle)
+		r.conn.client.CloseOperation(r.ctx, r.conn.sessionHandle, r.operationHandle)
 	}
 	return nil
 }
 
+// ColumnTypeScanType returns the Go type expected by Scan for the column.
 func (r *Rows) ColumnTypeScanType(index int) reflect.Type {
 	nullable := (r.columns)[index].LogicalType.Nullable
 	t := normalizeFlinkType((r.columns)[index].LogicalType.Type)
@@ -193,6 +201,7 @@ func (r *Rows) ColumnTypeScanType(index int) reflect.Type {
 	}
 }
 
+// ColumnTypeLength reports the declared length for variable-size columns.
 func (r *Rows) ColumnTypeLength(index int) (length int64, ok bool) {
 	typeLen := (r.columns)[index].LogicalType.Length
 	if typeLen == nil {
@@ -209,6 +218,7 @@ func (r *Rows) columnTypePrecision(index int) (length int, ok bool) {
 	return *perc, true
 }
 
+// ColumnTypePrecisionScale returns precision and scale for a column when available.
 func (r *Rows) ColumnTypePrecisionScale(index int) (precision, scale int64, ok bool) {
 	perc := (r.columns)[index].LogicalType.Precision
 	sc := (r.columns)[index].LogicalType.Scale
@@ -411,6 +421,7 @@ func (r *Rows) decodeField(t typeAlias, nullable bool, raw []byte, colIdx int) (
 	}
 }
 
+// Next advances to the next row, materialising values into dest.
 func (r *Rows) Next(dest []driver.Value) error {
 	if r.closed {
 		return errRowsClosed
@@ -425,9 +436,11 @@ func (r *Rows) Next(dest []driver.Value) error {
 		return false
 	})
 
-	// No more data
+	// No more data or fetch error
 	if !ok {
-		// r.closed = true
+		if r.iterErr != nil {
+			return r.iterErr
+		}
 		return io.EOF
 	}
 
@@ -445,17 +458,17 @@ func (r *Rows) Next(dest []driver.Value) error {
 }
 
 func newRows(ctx context.Context, conn *flinkConn, operationHandle string, initialResults []RowData, columns []ColumnInfo, nextToken string) (*Rows, error) {
-	iterator := newResultsIterator(ctx, conn, operationHandle, initialResults, nextToken)
-	return &Rows{
+	rows := &Rows{
 		conn:            conn,
 		ctx:             ctx,
 		operationHandle: operationHandle,
-		iterator:        iterator,
 		columns:         columns,
-	}, nil
+	}
+	rows.iterator = newResultsIterator(rows, ctx, conn, operationHandle, initialResults, nextToken)
+	return rows, nil
 }
 
-func newResultsIterator(ctx context.Context, conn *flinkConn, operationHandle string, initialResults []RowData, nextToken string) iter.Seq[RowData] {
+func newResultsIterator(rows *Rows, ctx context.Context, conn *flinkConn, operationHandle string, initialResults []RowData, nextToken string) iter.Seq[RowData] {
 	results := initialResults
 	token := nextToken
 	pos := 0
@@ -476,6 +489,9 @@ func newResultsIterator(ctx context.Context, conn *flinkConn, operationHandle st
 			// todo: fetch next results asynchronously
 			response, err := client.FetchResults(ctx, sessionHandle, operationHandle, token, "")
 			if err != nil {
+				if rows.iterErr == nil {
+					rows.iterErr = fmt.Errorf("flink: fetch results failed: %w", err)
+				}
 				conn.cancelOperation(ctx, operationHandle)
 				return
 			}
@@ -489,6 +505,9 @@ func newResultsIterator(ctx context.Context, conn *flinkConn, operationHandle st
 			if len(results) == 0 {
 				select {
 				case <-ctx.Done():
+					if rows.iterErr == nil {
+						rows.iterErr = ctx.Err()
+					}
 					conn.cancelOperation(ctx, operationHandle)
 					return
 				case <-time.After(backoff):

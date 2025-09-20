@@ -7,6 +7,7 @@ import (
 	"net/http"
 )
 
+// ConnConfig captures the settings used to create a SQL Gateway session.
 type ConnConfig struct {
 	GatewayURL string
 	Client     *http.Client
@@ -14,6 +15,8 @@ type ConnConfig struct {
 	Properties map[string]string
 }
 
+// WithDefaults returns a ConnConfig populated with sensible defaults for
+// connecting to a local SQL Gateway instance.
 func WithDefaults() *ConnConfig {
 	return &ConnConfig{
 		GatewayURL: "http://localhost:8081",
@@ -23,26 +26,31 @@ func WithDefaults() *ConnConfig {
 	}
 }
 
+// ConnOption mutates a ConnConfig before it is used to construct a connector.
 type ConnOption func(c *ConnConfig)
 
+// WithGatewayURL sets the SQL Gateway endpoint for connection.
 func WithGatewayURL(gatewayUrl string) ConnOption {
 	return func(c *ConnConfig) {
 		c.GatewayURL = gatewayUrl
 	}
 }
 
+// WithClient sets the HTTP client used by the underlying Gateway client.
 func WithClient(client *http.Client) ConnOption {
 	return func(c *ConnConfig) {
 		c.Client = client
 	}
 }
 
+// WithAPIVersion selects the SQL Gateway REST API version (e.g. v1, v2, v3).
 func WithAPIVersion(apiVersion string) ConnOption {
 	return func(c *ConnConfig) {
 		c.APIVersion = apiVersion
 	}
 }
 
+// WithProperties sets SQL Gateway session properties.
 func WithProperties(properties map[string]string) ConnOption {
 	return func(c *ConnConfig) {
 		if c.Properties == nil {
@@ -61,7 +69,7 @@ type connector struct {
 	properties    map[string]string
 }
 
-// NewConnector creates a connection that can be used with `sql.OpenDB()`.
+// NewConnector creates a connector that can be used with `sql.OpenDB()`.
 // This is an easier way to set up the DB instead of having to construct a DSN string.
 func NewConnector(options ...ConnOption) (driver.Connector, error) {
 	cfg := WithDefaults()
@@ -83,6 +91,7 @@ func NewConnector(options ...ConnOption) (driver.Connector, error) {
 func (c *connector) Connect(ctx context.Context) (driver.Conn, error) {
 	if c.sessionHandle == "" {
 		var err error
+		// Session is shared between all connections to let them share catalogs, tables, etc.
 		c.sessionHandle, err = c.client.OpenSession(ctx, &OpenSessionRequest{
 			Properties: c.properties,
 		})

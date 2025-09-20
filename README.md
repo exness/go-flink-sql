@@ -1,15 +1,7 @@
-todo
 # go-flink-sql
 
 A lightweight Go driver for the **Apache Flink SQL Gateway**.
 
-## Highlights
-- Idiomatic `database/sql` integration (`sql.OpenDB(connector)`).
-- Simple programmatic configuration via `NewConnector(WithGatewayURL(...), WithProperties(...))`.
-- Type mapping for Flink → Go types, including **nullable** handling.
-- Supports batch and streaming queries.
-
----
 
 ## Quick start
 
@@ -17,52 +9,159 @@ A lightweight Go driver for the **Apache Flink SQL Gateway**.
 package main
 
 import (
-    "context"
-    "database/sql"
-	"github.com/exness/go-flink-sql-driver"
-    "fmt"
-    "log"
-    "time"
+	"context"
+	"database/sql"
+	"encoding/json"
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/exness/go-flink-sql"
 )
 
+type NullString sql.NullString
+
+type order struct {
+	ID        int64
+	Item      string
+	CreatedAt time.Time
+	Customer  customer
+	Note      *string
+}
+
+type customer struct {
+	FirstName string `json:"first_name"`
+	LastName  string `json:"last_name"`
+	Age       int    `json:"age"`
+}
+
+func (c *customer) Scan(src any) error {
+	data, ok := src.([]byte)
+	if !ok {
+		return fmt.Errorf("flink: unexpected customer scan type %T", src)
+	}
+	err := json.Unmarshal(data, c)
+	return err
+}
+
+func ptrToString(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
+}
+
 func main() {
-    endpoint := "http://localhost:8083" // Flink SQL Gateway HTTP endpoint
+	connector, err := flink.NewConnector(
+		flink.WithGatewayURL("http://localhost:8083"),
+		flink.WithProperties(map[string]string{
+			"execution.runtime-mode": "STREAMING",
+		}),
+	)
+	if err != nil {
+		log.Fatal(err)
+	}
 
-    // Create connector and open *sql.DB
-    connector, _ := NewConnector(
-        WithGatewayURL(endpoint),
-        WithProperties(map[string]string{
-            // example: run in streaming mode
-            "execution.runtime-mode": "STREAMING",
-        }),
-    )
-    db := sql.OpenDB(connector)
-    defer db.Close()
+	db := sql.OpenDB(connector)
+	defer db.Close()
 
-    // A minimal sanity check: SELECT 1 must be int64
-    ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-    defer cancel()
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
 
-    rows, err := db.QueryContext(ctx, "SELECT 1")
-    if err != nil { log.Fatal(err) }
-    defer rows.Close()
+	ddl := `CREATE TABLE orders (
+		id INT NOT NULL,
+		item STRING NOT NULL,
+		created_at TIMESTAMP(6) NOT NULL,
+		customer ROW<
+			first_name STRING not null,
+			last_name STRING not null,
+			age INT not null
+		> NOT NULL,
+		notes STRING
+	) WITH (
+		'connector' = 'datagen',
+		'rows-per-second' = '5',
+		'fields.id.kind' = 'sequence',
+		'fields.id.start' = '1',
+		'fields.id.end' = '100',
+		'fields.item.length' = '12',
+		'fields.customer.first_name.length' = '8',
+		'fields.customer.last_name.length' = '10',
+		'fields.customer.age.min' = '21',
+		'fields.customer.age.max' = '65',
+		'fields.notes.length' = '12'
+	)`
+	if _, err := db.ExecContext(ctx, ddl); err != nil {
+		log.Fatal(err)
+	}
 
-    var got1 [][]any
-    for rows.Next() {
-        var v any
-        if err := rows.Scan(&v); err != nil { log.Fatal(err) }
-        got1 = append(got1, []any{v})
-        break
-    }
-    if len(got1) == 0 { log.Fatal("no rows") }
-    if _, ok := got1[0][0].(int64); !ok {
-        log.Fatalf("expected int64, got %T", got1[0][0])
-    }
-    fmt.Println("SELECT 1 OK (int64)")
+	rows, err := db.QueryContext(ctx, `
+		SELECT
+			id,
+			item,
+			created_at,
+			customer,
+			notes AS note
+		FROM orders
+	`)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer rows.Close()
+
+	var seen int
+	for rows.Next() {
+		var o order
+		var note NullString
+		if err := rows.Scan(&o.ID, &o.Item, &o.CreatedAt, &o.Customer, &note); err != nil {
+			log.Fatal(err)
+		}
+		if note.Valid {
+			val := note.String
+			o.Note = &val
+		} else {
+			o.Note = nil
+		}
+
+		fmt.Printf(
+			"%d\t%s\t%s\t%s %s (%d)\t%s\n",
+			o.ID,
+			o.Item,
+			o.CreatedAt.Format(time.RFC3339Nano),
+			o.Customer.FirstName,
+			o.Customer.LastName,
+			o.Customer.Age,
+			ptrToString(o.Note),
+		)
+
+		seen++
+		if seen == 5 {
+			break
+		}
+	}
+	if err := rows.Err(); err != nil {
+		log.Fatal(err)
+	}
 }
 ```
-> Tip: For binary/complex types (e.g., `BINARY`, `VARBINARY`, `ROW`, `MAP`), values arrive as `[]byte`. Decode as needed for your app.
+> Tip: Complex types such as `ROW`, `MAP`, `ARRAY`, and binary data arrive as `[]byte`. Decode the JSON or binary payload to suit your application.
 
+### Low-level REST access
+
+If you need features beyond `database/sql`, reuse the exported client in `gateway.go`:
+
+```go
+client, err := flink.NewClient("http://localhost:8083", nil, "v3")
+if err != nil {
+    log.Fatal(err)
+}
+
+status, err := client.GetOperationStatus(ctx, "session-handle", "operation-handle")
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Println("current status:", status)
+```
 
 ## Type mapping (summary)
 

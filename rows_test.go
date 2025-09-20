@@ -14,10 +14,11 @@ import (
 	"time"
 )
 
-// mockClient implements the minimal method used by Rows.Close.
-
 // gatewayMock implements GatewayClient for testing;
-type gatewayMock struct{ cancelCalled bool }
+type gatewayMock struct {
+	cancelCalled bool
+	closeCalled  bool
+}
 
 func (m *gatewayMock) GetInfo(ctx context.Context) (*InfoResponse, error)   { return nil, nil }
 func (m *gatewayMock) GetAPIVersions(ctx context.Context) ([]string, error) { return nil, nil }
@@ -43,6 +44,7 @@ func (m *gatewayMock) CancelOperation(ctx context.Context, sessionHandle, operat
 	return "", nil
 }
 func (m *gatewayMock) CloseOperation(ctx context.Context, sessionHandle, operationHandle string) (string, error) {
+	m.closeCalled = true
 	return "", nil
 }
 func (m *gatewayMock) GetOperationStatus(ctx context.Context, sessionHandle, operationHandle string) (string, error) {
@@ -53,6 +55,15 @@ func (m *gatewayMock) ExecuteStatement(ctx context.Context, sessionHandle string
 }
 func (m *gatewayMock) FetchResults(ctx context.Context, sessionHandle, operationHandle, token string, rowFormat string) (*FetchResultsResponseBody, error) {
 	return nil, nil
+}
+
+type fetchErrMock struct {
+	gatewayMock
+	err error
+}
+
+func (m *fetchErrMock) FetchResults(ctx context.Context, sessionHandle, operationHandle, token string, rowFormat string) (*FetchResultsResponseBody, error) {
+	return nil, m.err
 }
 
 func assertRawBytes(t *testing.T, dest []driver.Value, idxs ...int) {
@@ -186,6 +197,26 @@ func TestRowsNext_AllTypesNotNull(t *testing.T) {
 	// Next() should now return io.EOF
 	if err := r.Next(dest); err != io.EOF {
 		t.Fatalf("expected io.EOF after draining rows, got %v", err)
+	}
+}
+
+func TestRowsNext_PropagatesFetchError(t *testing.T) {
+	ctx := context.Background()
+	fetchErr := errors.New("fetch boom")
+	client := &fetchErrMock{err: fetchErr}
+	conn := &flinkConn{client: client, sessionHandle: "sess"}
+	cols := []ColumnInfo{{Name: "c", LogicalType: LogicalType{Type: "INTEGER"}}}
+	r, err := newRows(ctx, conn, "op", nil, cols, "0")
+	if err != nil {
+		t.Fatalf("newRows returned error: %v", err)
+	}
+	dest := make([]driver.Value, len(cols))
+	err = r.Next(dest)
+	if err == nil {
+		t.Fatal("expected error from Next when FetchResults fails, got nil")
+	}
+	if !errors.Is(err, fetchErr) {
+		t.Fatalf("Next error = %v, want to wrap %v", err, fetchErr)
 	}
 }
 
@@ -425,7 +456,7 @@ func TestRowsColumnTypeNullable_FromMakeColsTrue(t *testing.T) {
 	}
 }
 
-func TestRowsClose_CallsCancelWhenOpen(t *testing.T) {
+func TestRowsClose_CallsCloseOperationWhenOpen(t *testing.T) {
 	m := &gatewayMock{}
 	fc := &flinkConn{client: m, sessionHandle: "sess"}
 
@@ -439,14 +470,21 @@ func TestRowsClose_CallsCancelWhenOpen(t *testing.T) {
 	if err := r.Close(); err != nil {
 		t.Fatalf("Close() returned error: %v", err)
 	}
-	if !m.cancelCalled {
-		t.Fatalf("expected CancelOperation to be called when closing open Rows")
+	if !m.closeCalled {
+		t.Fatalf("expected CloseOperation to be called when closing open Rows")
+	}
+	if m.cancelCalled {
+		t.Fatalf("CancelOperation should not be called when closing open Rows")
 	}
 
 	// Idempotent on second call
+	m.closeCalled = false
 	m.cancelCalled = false
 	if err := r.Close(); err != nil {
 		t.Fatalf("second Close() returned error: %v", err)
+	}
+	if m.closeCalled {
+		t.Fatalf("CloseOperation should not be called on second Close()")
 	}
 	if m.cancelCalled {
 		t.Fatalf("CancelOperation should not be called on second Close()")

@@ -7,6 +7,8 @@ import (
 	"time"
 )
 
+const fetchResultsPollInterval = time.Second
+
 type flinkConn struct {
 	client        GatewayClient
 	sessionHandle string
@@ -67,20 +69,20 @@ func (c *flinkConn) ExecContext(ctx context.Context, query string, args []driver
 	})
 	defer c.closeOperation(ctx, opHandle)
 	if err != nil {
-		return nil, fmt.Errorf("flinksql: ExecContext failed to submit statement: %w", err)
+		return nil, fmt.Errorf("flink: ExecContext failed to submit statement: %w", err)
 	}
-	_, err = c.fetchUntilResultsReady(ctx, opHandle, 1000*time.Millisecond)
+	_, err = c.fetchUntilResultsReady(ctx, opHandle)
 	if err != nil {
-		return nil, fmt.Errorf("flinksql: ExecContext failed: %w", err)
+		return nil, fmt.Errorf("flink: ExecContext failed: %w", err)
 	}
 	return driver.RowsAffected(0), nil
 }
 
-func (c *flinkConn) fetchUntilResultsReady(ctx context.Context, opHandle string, pollInterval time.Duration) (*FetchResultsResponseBody, error) {
+func (c *flinkConn) fetchUntilResultsReady(ctx context.Context, opHandle string) (*FetchResultsResponseBody, error) {
 	for {
 		res, err := c.client.FetchResults(ctx, c.sessionHandle, opHandle, "0", "json")
 		if err != nil {
-			return nil, fmt.Errorf("flinksql: FetchResults failed: %w", err)
+			return nil, fmt.Errorf("flink: FetchResults failed: %w", err)
 		}
 
 		// Retry fetching until the query is ready, honoring context cancellation
@@ -89,7 +91,7 @@ func (c *flinkConn) fetchUntilResultsReady(ctx context.Context, opHandle string,
 			case <-ctx.Done():
 				c.closeOperation(ctx, opHandle)
 				return nil, ctx.Err()
-			case <-time.After(pollInterval):
+			case <-time.After(fetchResultsPollInterval):
 				// keep polling at a fixed interval
 			}
 			continue
@@ -106,16 +108,16 @@ func (c *flinkConn) QueryContext(ctx context.Context, query string, args []drive
 		Statement: query,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("flinksql: QueryContext failed to submit statement: %w", err)
+		return nil, fmt.Errorf("flink: QueryContext failed to submit statement: %w", err)
 	}
-	res, err := c.fetchUntilResultsReady(ctx, opHandle, 1000*time.Millisecond)
+	res, err := c.fetchUntilResultsReady(ctx, opHandle)
 	if err != nil {
 		c.cancelOperation(ctx, opHandle)
-		return nil, fmt.Errorf("flinksql: FetchResults failed: %w", err)
+		return nil, fmt.Errorf("flink: FetchResults failed: %w", err)
 	}
 	if !res.IsQueryResult && res.ResultKind != ResultKindSuccessWithContent {
 		c.closeOperation(ctx, opHandle)
-		return nil, fmt.Errorf("flinksql: Statement [%s] is not a query", query)
+		return nil, fmt.Errorf("flink: statement [%s] is not a query", query)
 	}
 	return newRows(ctx, c, opHandle, res.Results.Data, res.Results.Columns, res.NextToken())
 }

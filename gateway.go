@@ -1,10 +1,3 @@
-// Package flink provides a small Go wrapper around Apache Flink's SQL
-// Gateway REST API. The client supports creating and closing sessions,
-// executing statements, polling results, managing operations and
-// retrieving cluster information.  It hides the details of URL
-// construction and JSON marshaling/unmarshaling so that users can
-// interact with the gateway using idiomatic Go functions.
-
 package flink
 
 import (
@@ -33,7 +26,10 @@ const (
 )
 
 // GatewayClient is the minimal interface implemented by *Client.
-// It allows consumers to depend on an interface for easier testing/mocking.
+// It exposes the raw Flink SQL Gateway HTTP surface area for advanced users
+// who need functionality beyond the database/sql driver. Most callers should
+// prefer using higher-level types and treat this interface as a low-level
+// escape hatch when direct REST access is unavoidable.
 type GatewayClient interface {
 	GetInfo(ctx context.Context) (*InfoResponse, error)
 	GetAPIVersions(ctx context.Context) ([]string, error)
@@ -53,16 +49,17 @@ type GatewayClient interface {
 
 // Client represents a SQL Gateway REST API client.  It holds the
 // base URL for the Gateway and an underlying http.Client that is used
-// to execute all requests.  Users may set custom timeouts or HTTP
-// transport settings on the underlying client if necessary.
+// to execute all requests.  The Client is intentionally exported as a
+// low-level escape hatch for scenarios that require direct REST
+// interaction with the Flink SQL Gateway; the database/sql driver
+// should remain the primary integration point for most applications.
 type Client struct {
 	// BaseURL should be the root of the SQL Gateway REST API, e.g.
 	// "http://localhost:8083".  Do not include a trailing slash; the
 	// Client automatically appends endpoint paths.
 	BaseURL *url.URL
 	// HTTPClient is the http.Client used for sending requests.  If
-	// nil, http.DefaultClient is used.  You can set custom timeouts
-	// or transports on this client for better control.
+	// nil, http.DefaultClient is used.
 	HTTPClient *http.Client
 	// APIVersion controls which API version is used for requests.
 	// Valid values are "v1", "v2" or "v3".  If empty, "v3" is used.
@@ -117,8 +114,7 @@ type InfoResponse struct {
 }
 
 // GetInfo fetches cluster metadata from the gateway using GET /info.
-// It returns an InfoResponse or an error.  Context may be used to
-// cancel the request.
+// It returns an InfoResponse or an error.
 func (c *Client) GetInfo(ctx context.Context) (*InfoResponse, error) {
 	endpoint, err := c.buildEndpoint("info")
 	if err != nil {
@@ -149,8 +145,7 @@ type APIResponse struct {
 }
 
 // GetAPIVersions returns the list of supported REST API versions
-// available on the server.  Clients can inspect this to decide which
-// version to use.  The default version is usually the highest one.
+// available on the server.
 func (c *Client) GetAPIVersions(ctx context.Context) ([]string, error) {
 	endpoint, err := c.buildEndpoint("api_versions")
 	if err != nil {
@@ -176,8 +171,6 @@ func (c *Client) GetAPIVersions(ctx context.Context) ([]string, error) {
 }
 
 // OpenSessionRequest defines the payload for creating a new session.
-// Properties may include arbitrary configuration entries; sessionName
-// can be used to label the session on the server.
 type OpenSessionRequest struct {
 	Properties  map[string]string `json:"properties,omitempty"`
 	SessionName string            `json:"sessionName,omitempty"`
@@ -566,8 +559,6 @@ type RowData struct {
 }
 
 // GetOperationStatus retrieves the current status of an operation.
-// Clients should poll this endpoint until they see a terminal state
-// (COMPLETED, CANCELLED, etc.).
 func (c *Client) GetOperationStatus(ctx context.Context, sessionHandle, operationHandle string) (string, error) {
 	endpoint, err := c.buildEndpoint("sessions", sessionHandle, "operations", operationHandle, "status")
 	if err != nil {
@@ -614,7 +605,7 @@ type ExecuteStatementResponse struct {
 }
 
 // ExecuteStatement submits a SQL statement for execution in the
-// specified session.  It returns the operation handle on success.
+// specified session. It returns the operation handle on success.
 // Statement execution is asynchronous; use GetOperationStatus and
 // FetchResults to monitor and retrieve results.
 func (c *Client) ExecuteStatement(ctx context.Context, sessionHandle string, reqBody *ExecuteStatementRequest) (string, error) {
@@ -651,14 +642,11 @@ func (c *Client) ExecuteStatement(ctx context.Context, sessionHandle string, req
 }
 
 // FetchResults retrieves a batch of results for the given operation
-// handle and token.  The token identifies which batch to fetch: 0
+// handle and token. The token identifies which batch to fetch: 0
 // indicates the first batch, while the `nextResultUri` returned from
-// prior calls contains the token for subsequent batches.  The
+// prior calls contains the token for subsequent batches. The
 // rowFormat parameter controls the serialization format of the
-// response.  Valid values include "JSON" (default) and "PLAIN_TEXT".
-// This function returns an arbitrary JSON structure (decoded into
-// interface{}) representing the result payload.  The caller can cast
-// or map the data into concrete Go types as needed.
+// response. Valid values include "JSON" (default) and "PLAIN_TEXT".
 func (c *Client) FetchResults(ctx context.Context, sessionHandle, operationHandle, token string, rowFormat string) (*FetchResultsResponseBody, error) {
 	endpoint, err := c.buildEndpoint("sessions", sessionHandle, "operations", operationHandle, "result", token)
 	if err != nil {
@@ -721,12 +709,6 @@ func (r *FetchResultsResponseBody) NextToken() string {
 	return segments[len(segments)-1]
 }
 
-// do executes an HTTP request using the client’s HTTPClient.  It
-// ensures that a non-nil http.Client is available and applies a
-// default timeout if none is provided.  In particular, if the
-// caller’s HTTPClient is nil, http.DefaultClient is used.  This
-// helper centralizes request execution and may be extended to add
-// authentication headers or other custom behaviours in the future.
 func (c *Client) do(req *http.Request) (*http.Response, error) {
 	client := c.HTTPClient
 	if client == nil {
