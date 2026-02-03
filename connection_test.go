@@ -26,6 +26,7 @@ var (
 	endpoint      string
 	ctx           = context.Background()
 	hostSharedDir string
+	flinkImage    = "flink:2.2.0"
 )
 
 var (
@@ -67,7 +68,7 @@ func TestMain(m *testing.M) {
 	jobManager, err = testcontainers.GenericContainer(ctx,
 		testcontainers.GenericContainerRequest{
 			ContainerRequest: testcontainers.ContainerRequest{
-				Image:    "flink:1.20",
+				Image:    flinkImage,
 				Networks: []string{net.Name},
 				Env: map[string]string{
 					"FLINK_PROPERTIES": "jobmanager.rpc.address: jobmanager",
@@ -96,7 +97,7 @@ func TestMain(m *testing.M) {
 	taskManager, err = testcontainers.GenericContainer(ctx,
 		testcontainers.GenericContainerRequest{
 			ContainerRequest: testcontainers.ContainerRequest{
-				Image:    "flink:1.20",
+				Image:    flinkImage,
 				Networks: []string{net.Name},
 				Env: map[string]string{
 					"FLINK_PROPERTIES": "jobmanager.rpc.address: jobmanager",
@@ -121,7 +122,7 @@ func TestMain(m *testing.M) {
 	sqlGateway, err = testcontainers.GenericContainer(ctx,
 		testcontainers.GenericContainerRequest{
 			ContainerRequest: testcontainers.ContainerRequest{
-				Image:    "flink:1.20",
+				Image:    flinkImage,
 				Networks: []string{net.Name},
 				Env: map[string]string{
 					"FLINK_PROPERTIES": "jobmanager.rpc.address: jobmanager",
