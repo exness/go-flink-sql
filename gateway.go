@@ -68,6 +68,17 @@ type Client struct {
 
 var _ GatewayClient = (*Client)(nil)
 
+// errorWithBody returns an error that includes the HTTP status and, when
+// non-empty, the raw response body. This gives callers visibility into
+// server-side error details (e.g. Java stack traces from Flink gateway).
+func errorWithBody(context, status string, body []byte) error {
+	body = bytes.TrimSpace(body)
+	if len(body) > 0 {
+		return fmt.Errorf("%s: %s: %s", context, status, body)
+	}
+	return fmt.Errorf("%s: %s", context, status)
+}
+
 // NewClient constructs a new Client for the given baseURL.  The
 // baseURL must be a valid URL string pointing at the SQL Gateway
 // server (e.g. "http://localhost:8083").  Optionally, a custom
@@ -129,11 +140,15 @@ func (c *Client) GetInfo(ctx context.Context) (*InfoResponse, error) {
 		return nil, err
 	}
 	defer resp.Body.Close()
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("info request failed: %s", resp.Status)
+		return nil, errorWithBody("info request failed", resp.Status, bodyBytes)
 	}
 	var info InfoResponse
-	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
+	if err := json.Unmarshal(bodyBytes, &info); err != nil {
 		return nil, err
 	}
 	return &info, nil
@@ -160,11 +175,15 @@ func (c *Client) GetAPIVersions(ctx context.Context) ([]string, error) {
 		return nil, err
 	}
 	defer resp.Body.Close()
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("api_versions request failed: %s", resp.Status)
+		return nil, errorWithBody("api_versions request failed", resp.Status, bodyBytes)
 	}
 	var body APIResponse
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+	if err := json.Unmarshal(bodyBytes, &body); err != nil {
 		return nil, err
 	}
 	return body.Versions, nil
@@ -208,11 +227,15 @@ func (c *Client) OpenSession(ctx context.Context, reqBody *OpenSessionRequest) (
 		return "", err
 	}
 	defer resp.Body.Close()
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("open session failed: %s", resp.Status)
+		return "", errorWithBody("open session failed", resp.Status, bodyBytes)
 	}
 	var out OpenSessionResponse
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+	if err := json.Unmarshal(bodyBytes, &out); err != nil {
 		return "", err
 	}
 	return out.SessionHandle, nil
@@ -235,7 +258,8 @@ func (c *Client) CloseSession(ctx context.Context, sessionHandle string) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("close session failed: %s", resp.Status)
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		return errorWithBody("close session failed", resp.Status, bodyBytes)
 	}
 	return nil
 }
@@ -257,13 +281,17 @@ func (c *Client) GetSessionConfig(ctx context.Context, sessionHandle string) (ma
 		return nil, err
 	}
 	defer resp.Body.Close()
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("get session config failed: %s", resp.Status)
+		return nil, errorWithBody("get session config failed", resp.Status, bodyBytes)
 	}
 	var result struct {
 		Properties map[string]string `json:"properties"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := json.Unmarshal(bodyBytes, &result); err != nil {
 		return nil, err
 	}
 	return result.Properties, nil
@@ -307,11 +335,15 @@ func (c *Client) CompleteStatement(ctx context.Context, sessionHandle string, re
 		return nil, err
 	}
 	defer resp.Body.Close()
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("complete statement failed: %s", resp.Status)
+		return nil, errorWithBody("complete statement failed", resp.Status, bodyBytes)
 	}
 	var out CompleteStatementResponse
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+	if err := json.Unmarshal(bodyBytes, &out); err != nil {
 		return nil, err
 	}
 	return out.Candidates, nil
@@ -357,7 +389,8 @@ func (c *Client) ConfigureSession(ctx context.Context, sessionHandle string, req
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("configure session failed: %s", resp.Status)
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		return errorWithBody("configure session failed", resp.Status, bodyBytes)
 	}
 	return nil
 }
@@ -380,7 +413,8 @@ func (c *Client) Heartbeat(ctx context.Context, sessionHandle string) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("heartbeat failed: %s", resp.Status)
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		return errorWithBody("heartbeat failed", resp.Status, bodyBytes)
 	}
 	return nil
 }
@@ -436,11 +470,15 @@ func (c *Client) RefreshMaterializedTable(ctx context.Context, sessionHandle, id
 		return "", err
 	}
 	defer resp.Body.Close()
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("refresh materialized table failed: %s", resp.Status)
+		return "", errorWithBody("refresh materialized table failed", resp.Status, bodyBytes)
 	}
 	var out RefreshMaterializedTableResponse
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+	if err := json.Unmarshal(bodyBytes, &out); err != nil {
 		return "", err
 	}
 	return out.OperationHandle, nil
@@ -463,12 +501,16 @@ func (c *Client) CancelOperation(ctx context.Context, sessionHandle, operationHa
 		return "nil", err
 	}
 	defer resp.Body.Close()
-	var out OperationStatusResponse
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return "nil", err
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return "nil", fmt.Errorf("cancel operation failed: %s", resp.Status)
+		return "", errorWithBody("cancel operation failed", resp.Status, bodyBytes)
+	}
+	var out OperationStatusResponse
+	if err := json.Unmarshal(bodyBytes, &out); err != nil {
+		return "", err
 	}
 	return out.Status, nil
 }
@@ -489,12 +531,16 @@ func (c *Client) CloseOperation(ctx context.Context, sessionHandle, operationHan
 		return "", err
 	}
 	defer resp.Body.Close()
-	var out OperationStatusResponse
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
 		return "", err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("close operation failed: %s", resp.Status)
+		return "", errorWithBody("close operation failed", resp.Status, bodyBytes)
+	}
+	var out OperationStatusResponse
+	if err := json.Unmarshal(bodyBytes, &out); err != nil {
+		return "", err
 	}
 	return out.Status, nil
 }
@@ -573,11 +619,15 @@ func (c *Client) GetOperationStatus(ctx context.Context, sessionHandle, operatio
 		return "", err
 	}
 	defer resp.Body.Close()
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("get operation status failed: %s", resp.Status)
+		return "", errorWithBody("get operation status failed", resp.Status, bodyBytes)
 	}
 	var out OperationStatusResponse
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+	if err := json.Unmarshal(bodyBytes, &out); err != nil {
 		return "", err
 	}
 	return out.Status, nil
@@ -631,11 +681,15 @@ func (c *Client) ExecuteStatement(ctx context.Context, sessionHandle string, req
 		return "", err
 	}
 	defer resp.Body.Close()
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("execute statement failed: %s", resp.Status)
+		return "", errorWithBody("execute statement failed", resp.Status, bodyBytes)
 	}
 	var out ExecuteStatementResponse
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+	if err := json.Unmarshal(bodyBytes, &out); err != nil {
 		return "", err
 	}
 	return out.OperationHandle, nil
@@ -681,9 +735,9 @@ func (c *Client) FetchResults(ctx context.Context, sessionHandle, operationHandl
 			Errors []string `json:"errors"`
 		}
 		if json.Unmarshal(bodyBytes, &errPayload) == nil && len(errPayload.Errors) > 0 {
-			return nil, fmt.Errorf("fetch results failed: %s", strings.Join(errPayload.Errors, "; "))
+			return nil, fmt.Errorf("fetch results failed: %s: %s", resp.Status, strings.Join(errPayload.Errors, "; "))
 		}
-		return nil, fmt.Errorf("fetch results failed: %s", resp.Status)
+		return nil, errorWithBody("fetch results failed", resp.Status, bodyBytes)
 	}
 
 	var result FetchResultsResponseBody
